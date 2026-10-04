@@ -1,0 +1,24 @@
+# secrets — never commit
+.env
+*.pem
+*.key
+
+# runtime data (lives in named volumes in production)
+data/
+*.sqlite3
+*.sqlite3-*
+audio/
+logs/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# misc
+.DS_Store
+*.part
+*.log
+/tmp/
