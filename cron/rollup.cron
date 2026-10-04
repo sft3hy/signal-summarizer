@@ -1,0 +1,12 @@
+# Signal roll-up — 20:00 America/Los_Angeles, every day.
+#
+# TZ is set container-wide (/etc/localtime + TZ), so the hour below is local.
+# The job is idempotent: it upserts (day, chat_id) rows, and the roll-up builder
+# holds a lock so cron, the web button and the boot catch-up cannot overlap.
+#
+# Field 6 is the user: nothing in here runs as root.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+TZ=America/Los_Angeles
+
+0 20 * * * summarizer /app/bin/rollup >> /data/logs/cron.log 2>&1

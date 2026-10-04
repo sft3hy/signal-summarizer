@@ -1,0 +1,78 @@
+services:
+  # signal-cli 0.14.8, linked as a secondary device. Deliberately NOT on the
+  # `edge` network and publishes no ports: nothing on the tailnet can open a
+  # socket to the process holding your account keys. Only this compose project
+  # reaches it, over `signalbox`.
+  signal-cli:
+    build:
+      context: ./signal-cli
+      args:
+        SIGNAL_CLI_VERSION: "0.14.8"
+    image: signal-summarizer-cli:0.14.8
+    container_name: signal-cli
+    restart: unless-stopped
+    networks: [signalbox]
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+      SIGNAL_HTTP_ADDR: 0.0.0.0:8080
+      # Off: --verbose prints plaintext message bodies into docker logs.
+      SIGNAL_VERBOSE: "${SIGNAL_VERBOSE:-0}"
+    volumes:
+      - signal-cli-data:/var/lib
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/check"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # The app. `edge` so Traefik can route signal-summarizer.home.arpa here.
+  signal-summarizer:
+    build: .
+    container_name: signal-summarizer
+    restart: unless-stopped
+    networks: [edge, signalbox]
+    depends_on:
+      signal-cli:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+      SS_SIGNAL_RPC_URL: http://signal-cli:8080
+      SS_TTS_URL: ${SS_TTS_URL:-http://host.docker.internal:8001}
+      SS_TTS_VOICE: ${SS_TTS_VOICE:-af_heart}
+      SS_TTS_SPEED: ${SS_TTS_SPEED:-1.0}
+      SS_LLM_URL: ${SS_LLM_URL:-http://100.122.197.81:8000/v1}
+      SS_LLM_MODEL: ${SS_LLM_MODEL:-Qwen3.8-Flash-Next-oQ4e-mtp}
+      SS_LLM_API_KEY: ${SS_LLM_API_KEY:?set SS_LLM_API_KEY in .env}
+      SS_AUTH_USER: ${SS_AUTH_USER:-signal}
+      SS_AUTH_PASSWORD: ${SS_AUTH_PASSWORD:?set SS_AUTH_PASSWORD in .env}
+      SS_RUN_AT: ${SS_RUN_AT:-20:00}
+      SS_WINDOW_HOURS: ${SS_WINDOW_HOURS:-24}
+      SS_DEVICE_NAME: ${SS_DEVICE_NAME:-signal-summarizer}
+      SS_MENTION_FULL_NAMES: ${SS_MENTION_FULL_NAMES:-Sam Townsend,Samuel Townsend}
+      SS_MENTION_NICKNAMES: ${SS_MENTION_NICKNAMES:-Slammy,Slammie}
+    extra_hosts:
+      # OrbStack answers host.docker.internal by default; this keeps the file
+      # honest if it ever moves to plain dockerd on Linux.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - summarizer-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 60s
+      timeout: 8s
+      retries: 3
+      start_period: 35s
+
+networks:
+  # external: Traefik lives in ~/homelab/edge and joins services by alias.
+  edge:
+    external: true
+  signalbox:
+    driver: bridge
+
+volumes:
+  signal-cli-data:
+  summarizer-data:
