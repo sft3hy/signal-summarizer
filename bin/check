@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Diagnostics: what is reachable, what is linked, what is on disk.
+
+    docker compose exec summarizer python3 /app/bin/check
+    ./bin/check                      # on the host, against a running stack
+
+Exits non-zero if something you would care about is broken, so it is usable from
+a shell or a health probe. Prints plain lines, never message content.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app import audio, config, mentions, signalrpc, store, tts  # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Check the roll-up stack.")
+    ap.add_argument("--quiet", action="store_true", help="only print failures")
+    args = ap.parse_args()
+
+    store.init()
+    ok = True
+    lines: list[tuple[str, str, bool]] = []
+
+    def note(label: str, detail: str, good: bool) -> None:
+        nonlocal ok
+        ok = ok and good
+        lines.append((label, detail, good))
+
+    # signal-cli
+    try:
+        ver = signalrpc.version()
+        note("signal-cli", f"reachable, {ver}", bool(ver))
+    except Exception as exc:
+        note("signal-cli", f"unreachable at {config.SIGNAL_RPC_URL}: {exc}", False)
+        ver = ""
+
+    try:
+        accounts = signalrpc.list_accounts()
+        if accounts:
+            handle = signalrpc.handle_of(accounts[0])
+            aci = signalrpc.aci_of(accounts[0]) or signalrpc.discover_aci(handle)
+            store.set_meta("self_aci", aci)
+            store.set_meta("account_handle", handle)
+            label = f"linked as {handle}"
+            if aci:
+                label += f", aci {aci[:8]}…"
+            note("account", label, True)
+        else:
+            note("account", "NOT linked — open /link and scan with your iPhone", False)
+    except Exception as exc:
+        note("account", f"could not list accounts: {exc}", False)
+
+    # voice
+    h = tts.health()
+    if str(h.get("status", "")) == "ok":
+        note("voice", f"{config.TTS_URL} ok, voice {config.TTS_VOICE}, backend {h.get('backend', '?')}", True)
+    else:
+        note("voice", f"{config.TTS_URL} not answering ({h.get('detail', h.get('status', '?'))}) — audio will be retried", False)
+
+    # model
+    if config.llm_api_key():
+        note("model", f"{config.LLM_MODEL} at {config.LLM_URL} (key present)", True)
+    else:
+        note("model", "no API key — summaries would fall back to a plain tally", False)
+
+    # store / privacy
+    b = store.buffer_stats()
+    buffered = int(b["buffered_messages"] or 0)
+    note("buffer", f"{buffered} raw rows buffered, {int(b['db_bytes']) / 1024:.0f} KB db, secure_delete={b['secure_delete']}", True)
+    if buffered and config.PURGE_RAW_AFTER_ROLLUP:
+        run = store.last_run() or {}
+        note("buffer", f"purge is armed; last run {run.get('status', 'never')} at {store.clock_of(run.get('finished_at'))}", True)
+
+    days = store.days_available()
+    today = store.day_of()
+    note("roll-ups", f"{len(days)} nights stored" + (f", tonight {len(store.rollups_for(today))} chats" if today in days else ", nothing for tonight yet"), True)
+
+    run = store.last_run()
+    if run and run.get("status") == "failed":
+        note("last run", f"FAILED: {str(run.get('error'))[:120]}", False)
+
+    clips = len(list(audio.day_dir(today).glob("*.mp3"))) if audio.day_dir(today).exists() else 0
+    note("audio", f"{clips} clip(s) rendered for tonight", True)
+
+    # the rule, restated so a regression is loud
+    rule_ok = bool(mentions.scan_text("Samuel Townsend")) and not mentions.scan_text("Sam is here")
+    note("mention rule", "full name flags, bare Sam does not", rule_ok)
+
+    for label, detail, good in lines:
+        if args.quiet and good:
+            continue
+        print(f"{'OK  ' if good else 'FAIL'} {label}: {detail}")
+
+    if not config.AUTH_PASSWORD and not config.ALLOW_UNAUTHENTICATED:
+        print("FAIL auth: SS_AUTH_PASSWORD is empty and the app refuses to serve")
+        ok = False
+
+    print(("all good" if ok else "problems above") + f"  ·  next roll-up {config.RUN_AT} {config.TZ}")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

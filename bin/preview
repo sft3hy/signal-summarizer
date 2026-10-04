@@ -1,0 +1,55 @@
+#!/bin/sh
+# Preview the UI against fake data, on a scratch dir, with no live services.
+#
+#   bin/preview              # serve on :8123 and write screenshots to /tmp/ss-shots
+#   bin/preview serve        # just serve (open http://127.0.0.1:8123)
+#
+# Deliberately safe:
+#   * SS_DATA_DIR points at a temp dir — the real ~/.signal-summarizer is untouched
+#   * SS_TTS_URL points at a dead port — af_heart is never asked to speak fake words
+#   * SS_SIGNAL_RPC_URL points at a dead port — signal-cli is never disturbed
+#   * auth is off, because headless Chrome cannot type a password
+set -eu
+cd "$(dirname "$0")/.."
+
+PORT="${SS_PREVIEW_PORT:-8123}"
+PRE="${SS_PREVIEW_DIR:-${TMPDIR:-/tmp}/ss-preview}"
+SHOTS="${SS_SHOTS_DIR:-${TMPDIR:-/tmp}/ss-shots}"
+
+rm -rf "$PRE" "$SHOTS"; mkdir -p "$PRE/logs" "$PRE/audio" "$SHOTS"
+export SS_DATA_DIR="$PRE" SS_WEB_PORT="$PORT" SS_ALLOW_UNAUTHENTICATED=1
+export SS_SIGNAL_RPC_URL="http://127.0.0.1:1" SS_TTS_URL="http://127.0.0.1:1"
+export SS_LLM_URL="http://127.0.0.1:1/v1" SS_LLM_API_KEY="preview"
+export SS_RUN_AT=20:00 TZ=America/Los_Angeles
+
+./bin/preview-seed
+
+if [ "${1:-shots}" = "serve" ]; then
+  echo "preview on http://127.0.0.1:$PORT  (ctrl-C stops it)"
+  exec python3 -m app.server
+fi
+
+pkill -f "app\.server" 2>/dev/null || true
+sleep 0.4
+python3 -m app.server >/tmp/ss-preview-server.log 2>&1 &
+SRV=$!
+sleep 2
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+if [ -x "$CHROME" ]; then
+  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --no-sandbox \
+    --window-size=430,2600 --virtual-time-budget=9000 \
+    --screenshot="$SHOTS/phone.png" "http://127.0.0.1:$PORT/" 2>/dev/null || echo "chrome phone shot failed"
+  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --no-sandbox \
+    --window-size=1200,1400 --virtual-time-budget=9000 \
+    --screenshot="$SHOTS/desktop.png" "http://127.0.0.1:$PORT/" 2>/dev/null || echo "chrome desktop shot failed"
+  "$CHROME" --headless=new --disable-gpu --hide-scrollbars --no-sandbox \
+    --window-size=430,1100 --virtual-time-budget=9000 \
+    --screenshot="$SHOTS/link.png" "http://127.0.0.1:$PORT/link" 2>/dev/null || echo "chrome link shot failed"
+  ls -l "$SHOTS"
+else
+  echo "no Chrome at $CHROME — server is still up on :$PORT"
+fi
+
+kill $SRV 2>/dev/null || true
+echo "shots in $SHOTS"
