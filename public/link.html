@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1420">
+<meta name="apple-mobile-web-app-title" content="Link Signal">
+<title>Link this device · Signal Roll-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+<style>
+  /* The handshake is the subject, so the code you scan is the hero: full white
+     card (phones scan white best), and the only motion is the bar that drains
+     while Signal honours this URI. */
+  .pair{text-align:center;padding-top:6vh}
+  .pair .date{font-size:clamp(26px,7.6vw,33px)}
+  .pair .lede{padding:14px 0 0}
+  .hint{margin:8px 0 0;font-size:14px;color:var(--ash)}
+  .hint b{color:var(--chalk);font-weight:600}
+  .qr{display:inline-block;margin:26px auto 0;padding:16px;background:#fff;border-radius:14px;line-height:0;box-shadow:0 16px 44px rgba(0,0,0,.5)}
+  .qr img,.qr canvas{display:block;width:min(228px,54vw);height:min(228px,54vw);image-rendering:pixelated}
+  .fuse{width:min(258px,62vw);height:2px;background:#1e293d;border-radius:2px;margin:16px auto 0;overflow:hidden}
+  .fuse i{display:block;height:100%;width:100%;background:var(--flare);transform-origin:left center}
+  .fuse.spent i{background:#3b4761}
+  .cd{margin:9px 0 0;font-size:12.5px;color:var(--dim);min-height:18px}
+  .waiting{display:inline-flex;align-items:center;gap:9px;margin-top:4px;font-size:13px;color:var(--ash)}
+  .spin{width:15px;height:15px;border-radius:50%;border:2px solid #26344b;border-top-color:var(--signal);animation:sp .9s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .steps{list-style:none;margin:30px auto 0;padding:20px 0 0;border-top:1px solid var(--rule);text-align:left;max-width:26rem;font-size:14px;line-height:1.7;color:var(--ash)}
+  .steps li{margin:0 0 13px}
+  .steps li:last-child{margin-bottom:0}
+  .steps b{color:var(--chalk);font-weight:600}
+  .uri{margin:18px auto 0;max-width:26rem;word-break:break-all;font-size:10.5px;color:#4e5b74;background:rgba(255,255,255,.03);border:1px solid var(--rule);border-radius:7px;padding:8px 10px}
+  .back{font-size:12.5px;color:var(--ash);text-decoration:none;border-bottom:1px solid var(--rule);padding-bottom:1px}
+  .back:hover{color:var(--chalk)}
+  .done{text-align:center;padding-top:11vh}
+  .tick{width:62px;height:62px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(53,201,166,.4);background:rgba(53,201,166,.1);color:var(--tick)}
+  .tick svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+  .err{color:var(--flare)}
+  @media (prefers-reduced-motion:reduce){.spin{animation:none;border-top-color:var(--signal)}}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="masthead">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <h1 class="wordmark">Link this device</h1>
+    <a class="back" href="/">Roll-up</a>
+  </header>
+
+  <section class="pair" id="waitWrap">
+    <div class="lede">
+      <p class="date">Point your iPhone at this</p>
+      <p class="hint"><b>Settings → Account → Linked Devices → Link a Device</b></p>
+    </div>
+    <div class="qr" id="qr"></div>
+    <div class="fuse" id="fuse"><i id="fuseFill"></i></div>
+    <p class="cd" id="cd">starting</p>
+    <p class="waiting"><span class="spin" aria-hidden="true"></span><span id="waitMsg">Waiting for your phone</span></p>
+
+    <ul class="steps">
+      <li><b>Your phone stays in charge.</b> This adds <code>signal-summarizer</code> as a second device. Nothing is re-registered, your number is not re-verified, and your chats stay end-to-end sealed on the way over.</li>
+      <li><b>The code dies in about a minute.</b> That is Signal's rule, not ours. This page mints a fresh one every 45 seconds, so take your time.</li>
+      <li><b>One tap cuts it off.</b> Settings → Account → Linked Devices → <code>signal-summarizer</code> → Unlink. Access stops immediately and stays stopped.</li>
+    </ul>
+    <p class="uri" id="uriBox"></p>
+  </section>
+
+  <section class="done" id="okWrap" hidden>
+    <div class="tick"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 12.5l5 5 10-11"/></svg></div>
+    <p class="date">Linked</p>
+    <p class="hint" id="okMsg">signal-cli is receiving now. Reading the last 24 hours.</p>
+    <p style="margin-top:24px"><a class="back" href="/" style="border-color:var(--signal);color:var(--signal)">Open tonight's roll-up</a></p>
+  </section>
+
+  <section class="done" id="errWrap" hidden>
+    <p class="date err">Pairing did not start</p>
+    <p class="hint" id="errMsg">signal-cli is not answering. Run <code>docker compose up -d signal-cli</code> in ~/dev/signal-summarizer, then reload this page.</p>
+  </section>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/qrcode.min.js"></script>
+<script src="/link.js"></script>
+</body>
+</html>

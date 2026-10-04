@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1420">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Roll-up">
+<title>Signal Roll-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=Newsreader:ital,opsz,wght@0,6..72,300..600;1,6..72,300..500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230d1420'/><g stroke='%23ef6a4d' stroke-width='2.6' stroke-linecap='round'><path d='M8 13v6M13 9v14M18 12v8M23 15v2'/></g></svg>">
+</head>
+<body>
+<main class="shell">
+  <header class="masthead">
+    <span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <h1 class="wordmark">Signal Roll-up</h1>
+    <label class="day-pick">
+      <span class="sr-only">Choose a night</span>
+      <select id="daySelect"></select>
+    </label>
+  </header>
+
+  <section class="lede">
+    <p class="date" id="dateLine">&nbsp;</p>
+    <p class="tally" id="tallyLine">Opening your night…</p>
+  </section>
+
+  <section class="deck" aria-label="Playback">
+    <div class="wave" id="wave" aria-label="Tonight's audio, one block per chat"></div>
+    <div class="transport">
+      <button id="playBtn" class="play" aria-label="Play the roll-up" disabled>
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.2v13.6a1 1 0 0 0 1.53.85l10.6-6.8a1 1 0 0 0 0-1.7L10.03 4.35A1 1 0 0 0 8.5 5.2z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4.8" width="3.8" height="14.4" rx="1.3"/><rect x="13.2" y="4.8" width="3.8" height="14.4" rx="1.3"/></svg>
+      </button>
+      <div class="reading">
+        <p class="now" id="nowLine">Nothing to read yet</p>
+        <div class="scrub" id="scrub" role="slider" tabindex="0" aria-label="Seek in this chat" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="scrub-fill" id="scrubFill"></span>
+        </div>
+        <p class="elapsed mono" id="elapsed">0:00</p>
+      </div>
+      <div class="nudge">
+        <button class="skip" id="prevBtn" aria-label="Previous chat">‹</button>
+        <button class="skip" id="nextBtn" aria-label="Next chat">›</button>
+        <div class="rates" id="rates" role="group" aria-label="Playback speed">
+          <button data-rate="0.9">0.9</button><button data-rate="1" class="on">1</button><button data-rate="1.3">1.3</button>
+        </div>
+      </div>
+    </div>
+    <audio id="audio" playsinline preload="none"></audio>
+  </section>
+
+  <p class="notice" id="notice" hidden></p>
+
+  <section class="block" id="blockNeeds" hidden>
+    <h2 class="block-head">Needs you <span class="block-count" id="countNeeds"></span></h2>
+    <div id="needs"></div>
+  </section>
+
+  <section class="block" id="blockNoted" hidden>
+    <h2 class="block-head">Noted <span class="block-count" id="countNoted"></span></h2>
+    <div id="noted"></div>
+  </section>
+
+  <p class="empty" id="empty" hidden>Nothing came in today.</p>
+
+  <section class="colophon">
+    <details>
+      <summary>How tonight was made</summary>
+      <div class="colophon-body" id="colophon"></div>
+    </details>
+    <div class="colophon-foot">
+      <span id="scheduleLine"></span>
+      <button class="quiet" id="runBtn">Run it now</button>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
