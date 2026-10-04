@@ -56,18 +56,6 @@ def seconds_of(mp3_bytes: int, speed: float = 1.0) -> float:
     return round(mp3_bytes / 16000.0 * (speed or 1.0), 1)
 
 
-def drop_stale(day: str) -> int:
-    """Remove an existing clip so the next render is requested, not served stale."""
-    removed = 0
-    for f in Path(config.AUDIO_DIR).glob(f"{day}/*.mp3"):
-        try:
-            f.unlink()
-            removed += 1
-        except OSError:
-            pass
-    return removed
-
-
 def render_chat(day: str, row: dict, *, force: bool = False, speed: float | None = None) -> dict:
     """Synthesize one chat's segment. Returns {audio_path,url,audio_seconds,...}."""
     dest = chat_path(day, row["chat_id"])
