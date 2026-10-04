@@ -249,22 +249,25 @@
     else if (state.run && state.run.status === 'failed') line += ' Last roll-up failed. Details below.';
     el.tally.innerHTML = line;
 
+    // Four distinct empty-ish states, in priority order. Collapsing them into one
+    // line is how "nothing came in today" got shown on a night that had summaries
+    // in it but no audio: the queue only counts clips, so an af_heart failure
+    // looked identical to an empty day. Each branch owns el.notice outright — the
+    // whole chain must run for every state, not just the unlinked one, or the
+    // stale notice from a previous paint survives into a state it no longer fits.
     const sig = state.signal || {};
+    const hasChats = (state.chats || []).length > 0;
+    const anyAudio = queue.length > 0;
     if (!sig.linked) {
       el.notice.hidden = false;
       el.notice.className = 'notice';
       el.notice.innerHTML = 'Not connected to Signal. <a href="/link">Scan once to link this device.</a> Your iPhone stays primary and you can unlink it any time.';
-      // Four distinct empty-ish states. Collapsing them into one line is how
-    // "nothing came in today" got shown on a night that had summaries in it
-    // but no audio: the queue only counts clips, so an af_heart failure
-    // looked identical to an empty day.
-    const hasChats = (state.chats || []).length > 0;
-    const anyAudio = queue.length > 0;
-    el.notice.hidden = false;
-    if (!hasChats) {
+    } else if (!hasChats) {
+      el.notice.hidden = false;
       el.notice.className = 'notice calm';
       el.notice.textContent = `Nothing came in today. The next roll-up runs at ${state.run_at || '20:00'}.`;
     } else if (!anyAudio) {
+      el.notice.hidden = false;
       el.notice.className = 'notice';
       el.notice.innerHTML = `Summaries are ready, but af_heart did not answer. ` +
         `<button class="quiet" id="voiceBtn">Create the audio</button>`;
@@ -508,6 +511,15 @@
     const res = await fetch(day ? `/api/day/${day}` : '/api/state', { cache: 'no-store' });
     if (res.status === 401) { location.reload(); return; }
     state = await res.json();
+    // Reset transport and release the previous day's blobs: every object URL kept
+    // past a day switch is a full MP3 the browser cannot reclaim, and a stale
+    // blob on the audio element after switching nights plays the wrong chat.
+    try { el.audio.pause(); el.audio.removeAttribute('src'); } catch (e) {}
+    delete el.audio.dataset.key;
+    index = -1;
+    blobs.forEach(u => URL.revokeObjectURL(u));
+    blobs.clear();
+    peaks.clear();
     queue = [];
     if (state.briefing && state.briefing.audio_url) {
       queue.push({ key: `${state.day}:intro`, chat_id: 'intro', title: `Roll-up for ${state.human_date || state.day}`,
@@ -532,7 +544,7 @@
         if (j.running || j.status === 'busy') { poll(); return; }
         el.runBtn.disabled = false; el.runBtn.textContent = 'Run it now';
         if (j.result && j.result.status === 'failed') toast('Roll-up failed. The details are in the panel.');
-        else { toast('Roll-up ready.'); blobs.forEach(u => URL.revokeObjectURL(u)); blobs.clear(); peaks.clear(); index = -1; load(state && state.day); }
+        else { toast('Roll-up ready.'); load(state && state.day); }
       } catch (err) { poll(); }
     }, 5000);
   }
