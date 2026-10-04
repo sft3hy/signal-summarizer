@@ -156,7 +156,7 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
                 store.log_event("audio-failed", f"intro: {exc}")
 
         if config.PURGE_RAW_AFTER_ROLLUP:
-            purged = audio_purge()
+            purged = audio_purge(start, end)
 
         ok = True
         store.finish_run(
@@ -176,25 +176,11 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
         return {"ok": False, "status": "failed", "error": str(exc), "day": day, "chats": chats}
 
 
-def speech_script(record: dict, no_reply: bool, labels: list[str], title: str) -> str:
-    """Spoken text for one chat. Summary plus draft, ear-friendly."""
-    row = {**record, "no_reply": no_reply, "mention_labels": labels or [], "participants": []}
-    try:
-        from . import speech
-
-        row["participants"] = [{"name": p, "count": 1} for p in (record.get("participants") or [])]
-        if isinstance(record.get("participants"), str):
-            import json as _json
-
-            row["participants"] = _json.loads(record["participants"] or "[]")
-        return speech.chat_script(row)
-    except Exception:
-        return f"{title}. {record.get('summary', '')}"
-
-
-def audio_purge() -> int:
-    """Wipe the buffered transcript text. The product is the summary."""
-    return store.purge_buffer(None, vacuum=True)
+def audio_purge(start_ms: int, end_ms: int) -> int:
+    """Wipe the buffered transcript text for the window just summarized. The
+    product is the summary. Bounded to [start,end] so a shorter test window or a
+    backfill cannot destroy messages the nightly roll-up has not read yet."""
+    return store.purge_window(start_ms, end_ms, vacuum=True)
 
 
 def reachable() -> dict:

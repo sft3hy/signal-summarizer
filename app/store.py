@@ -436,6 +436,23 @@ def purge_buffer(before_ms: int | None = None, *, vacuum: bool = True) -> int:
     return deleted
 
 
+def purge_window(start_ms: int, end_ms: int, *, vacuum: bool = True) -> int:
+    """Delete only the buffered messages inside one window.
+
+    A roll-up must never destroy text it did not summarize. The nightly default
+    (end = now, 24h window) clears the whole live buffer, so the privacy promise
+    holds; a `--hours 6` or `--day` run then only wipes what it actually covered,
+    and the older tail survives to be summarized by the real 8pm job.
+    """
+    with _LOCK, db() as conn:
+        cur = conn.execute("DELETE FROM messages WHERE ts>=? AND ts<=?",
+                           (int(start_ms), int(end_ms)))
+        deleted = cur.rowcount or 0
+    if deleted and vacuum:
+        _vacuum()
+    return deleted
+
+
 def _vacuum() -> None:
     try:
         conn = sqlite3.connect(config.DB_PATH, timeout=30)
@@ -462,6 +479,14 @@ def save_rollup(day: str, row: dict) -> None:
         },
         **row,
     }
+    # rollups_for() hands back participants and mention_labels already decoded
+    # (list and CSV-split). Any caller that round-trips a read row back through
+    # here — /api/say does — would otherwise bind a Python list and SQLite would
+    # raise ProgrammingError. Normalise the storage shape at the boundary.
+    if isinstance(row["participants"], (list, tuple, dict)):
+        row["participants"] = json.dumps(row["participants"])
+    if isinstance(row["mention_labels"], (list, tuple)):
+        row["mention_labels"] = ",".join(str(x) for x in row["mention_labels"])
     with db() as conn:
         conn.execute(
             """
