@@ -19,6 +19,7 @@ this process writes is what the 8pm job reads.
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import mimetypes
 import os
@@ -39,10 +40,39 @@ from app.ingest import INGEST  # noqa: E402
 PUBLIC = Path(__file__).resolve().parent.parent / "public"
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUDIO_FILE_RE = re.compile(r"^(?:[a-f0-9]{16}|intro)\.mp3$")
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _BUILD_LOCK = threading.Lock()
 _BUILD = {"running": False, "started": None, "last": None, "result": None}
 _LINK = {"state": "idle", "uri": "", "at": 0, "detail": "", "aci": ""}
 _LINK_LOCK = threading.Lock()
+
+
+def _range_bounds(rng: str | None, size: int):
+    """Resolve a single byte Range against a known size.
+
+    Returns (start, end) inclusive, None for no/parseable-but-ignore range, or
+    the string "unsatisfiable" when the start is past EOF (→ 416). A malformed
+    Range header is ignored, per RFC 7233: a client that sends garbage just gets
+    the whole file, not an error.
+    """
+    if not rng:
+        return None
+    m = _RANGE_RE.match(rng.strip())
+    if not m:
+        return None
+    start_s, end_s = m.group(1), m.group(2)
+    if not start_s and not end_s:
+        return None
+    if not start_s:                       # suffix range: the last N bytes
+        n = int(end_s)
+        if n <= 0:
+            return "unsatisfiable"
+        return max(0, size - n), size - 1
+    start = int(start_s)
+    if start >= size:
+        return "unsatisfiable"
+    end = int(end_s) if end_s else size - 1
+    return start, min(end, size - 1)
 
 
 def build_now(*, force: bool = False, speak: bool = True) -> dict:
@@ -198,7 +228,11 @@ class Handler(BaseHTTPRequestHandler):
             user, _, password = base64.b64decode(header[6:]).decode("utf-8", "replace").partition(":")
         except Exception:
             return False
-        return user == config.AUTH_USER and password == config.AUTH_PASSWORD
+        # compare_digest, not ==: a short-circuiting compare on the password of an
+        # app that serves plaintext chat summaries leaks the password one correct
+        # byte at a time to anyone who can time the responses.
+        return (hmac.compare_digest(user.encode(), config.AUTH_USER.encode())
+                and hmac.compare_digest(password.encode(), config.AUTH_PASSWORD.encode()))
 
     def _challenge(self) -> None:
         self.send_response(401)
@@ -229,51 +263,81 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code: int = 200) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
 
-    def _body(self) -> dict:
+    def _read_body(self) -> bytes:
+        """Consume the request body exactly once, before any response is written.
+
+        Answering 401/404 while the body still sits unread in the socket is the
+        classic keep-alive desync: the next request on this connection parses those
+        leftover bytes as its request line. Every POST drains here up front.
+        """
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            return {}
-        if not n:
+            n = 0
+        n = min(n, 64 * 1024)  # cap: these bodies are tiny JSON; refuse to be flooded
+        if n <= 0:
+            self._raw_body = b""
+        else:
+            try:
+                self._raw_body = self.rfile.read(n)
+            except Exception:
+                self._raw_body = b""
+        return self._raw_body
+
+    def _body(self) -> dict:
+        raw = getattr(self, "_raw_body", b"")
+        if not raw:
             return {}
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
+            return json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
 
     # --- audio (Range is mandatory for iOS) ---------------------------
 
+    def _send_range(self, start: int, end: int, size: int, path: Path) -> None:
+        length = end - start + 1
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            chunk = fh.read(length)
+        self.send_response(206)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(chunk)
+
+    def _send_unsatisfiable(self, size: int) -> None:
+        self.send_response(416)
+        self.send_header("Content-Range", f"bytes */{size}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _audio(self, path: Path) -> None:
         if not path.is_file():
             return self._send(404, b"no such clip", "text/plain")
         size = path.stat().st_size
+        if size == 0:
+            return self._send(404, b"empty clip", "text/plain")
         rng = self.headers.get("Range")
-        if rng and (m := re.match(r"bytes=(\d*)-(\d*)", rng)):
-            start = int(m.group(1) or 0)
-            end = int(m.group(2)) if m.group(2) else size - 1
-            end = min(end, size - 1)
-            start = min(start, end)
-            length = end - start + 1
-            with open(path, "rb") as fh:
-                fh.seek(start)
-                chunk = fh.read(length)
-            self.send_response(206)
-            self.send_header("Content-Type", "audio/mpeg")
-            self.send_header("Content-Length", str(length))
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Cache-Control", "public, max-age=604800")
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(chunk)
-            return
+        bounds = _range_bounds(rng, size)
+        if bounds == "unsatisfiable":
+            return self._send_unsatisfiable(size)
+        if bounds:
+            return self._send_range(*bounds, size, path)
         with open(path, "rb") as fh:
             self._send(200, fh.read(), "audio/mpeg", {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=604800"})
 
     def _static(self, rel: str) -> None:
         rel = (rel or "index.html").lstrip("/")
-        target = (PUBLIC / rel).resolve()
-        if not str(target).startswith(str(PUBLIC.resolve())) or not target.is_file():
+        root = PUBLIC.resolve()
+        target = (root / rel).resolve()
+        # is_relative_to, not str.startswith: "/app/public".startswith covers
+        # "/app/public_backup", a sibling directory the guard would wave through.
+        if not target.is_relative_to(root) or not target.is_file():
             return self._send(404, b"not found", "text/plain")
         ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         if target.suffix == ".css":
@@ -298,6 +362,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         try:
+            self._read_body()
             self._route_post()
         except Exception:
             store.log_event("http-error", traceback.format_exc(limit=3).strip()[-300:])
@@ -335,7 +400,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(path.lstrip("/"))
         if path == "/api/state":
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            return self._json(state_payload((q.get("day") or [None])[0]))
+            day = (q.get("day") or [None])[0]
+            if day and not _DAY_RE.match(day):
+                return self._json({"ok": False, "error": "bad day"}, 400)
+            return self._json(state_payload(day))
         if path.startswith("/api/day/"):
             day = path.split("/")[-1]
             if not _DAY_RE.match(day):
@@ -409,13 +477,23 @@ class Handler(BaseHTTPRequestHandler):
 
 def catch_up() -> None:
     """If we booted past RUN_AT with nothing built for today, build it."""
-    if not config.CATCH_UP_ON_BOOT or not INGEST.linked:
+    if not config.CATCH_UP_ON_BOOT:
+        return
+    # The ingest thread discovers the account asynchronously after start(), so a
+    # linked device still reports linked=False for the first second or two. Reading
+    # it once here decided "not linked" on almost every boot, so this job never ran.
+    # Wait (bounded) for link state to settle, then make the call.
+    deadline = time.time() + 30
+    while not INGEST.linked and time.time() < deadline:
+        time.sleep(0.5)
+    if not INGEST.linked:
         return
     now = time.localtime()
     hh, mm = (int(x) for x in config.RUN_AT.split(":"))
     if (now.tm_hour, now.tm_min) < (hh, mm):
         return
-    if store.last_run() and store.day_of((store.last_run() or {}).get("finished_at") or 0) == store.day_of():
+    run = store.last_run()
+    if run and (run.get("finished_at") or 0) and store.day_of(run["finished_at"]) == store.day_of():
         return
     store.log_event("catch-up", f"booting past {config.RUN_AT} with no roll-up for today")
     _build_thread(force=False)
