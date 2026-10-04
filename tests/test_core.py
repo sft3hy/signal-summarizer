@@ -291,6 +291,27 @@ class TestStorePrivacy(IsolatedDB):
             n = c.execute("SELECT COUNT(*) AS n FROM messages WHERE text LIKE '%secret%'").fetchone()["n"]
         self.assertEqual(n, 0)
 
+    def test_purge_window_never_deletes_text_it_did_not_summarize(self):
+        """A `--hours 6` roll-up at noon must leave the older tail for the 8pm job."""
+        store.insert_message(chat_id="dm:w", ts=100, sender_aci="a", sender_name="A", text="older, unsent")
+        store.insert_message(chat_id="dm:w", ts=5_000, sender_aci="b", sender_name="B", text="in window")
+        self.assertEqual(store.purge_window(4_000, 6_000), 1)
+        rows = store.messages_for("dm:w", 0, 9_999_999_999_999)
+        self.assertEqual([r["text"] for r in rows], ["older, unsent"])
+
+    def test_save_rollup_round_trips_a_decoded_row(self):
+        """/api/say re-saves rollups_for() output, where participants/mention_labels
+        are already Python objects. Binding those lists used to raise ProgrammingError."""
+        store.save_rollup("2026-10-03", {"chat_id": "dm:rt", "kind": "dm", "title": "RT",
+                                            "participants": '[{"name":"D","count":2}]',
+                                            "mention_labels": "Sam Townsend"})
+        row = store.rollups_for("2026-10-03")[0]
+        self.assertIsInstance(row["participants"], list)
+        store.save_rollup("2026-10-03", {**row, "audio_bytes": 123})
+        again = store.rollups_for("2026-10-03")[0]
+        self.assertEqual(again["audio_bytes"], 123)
+        self.assertEqual(again["participants"], [{"name": "D", "count": 2}])
+
     def test_unread_counted_before_purge_and_cleared_on_read(self):
         store.init()
         store.upsert_chat("dm:unread", kind="dm", title="U")
@@ -355,6 +376,17 @@ class TestAudioRouteGuard(unittest.TestCase):
         assert not _AUDIO_FILE_RE.match("intro.mp3.exe")
         assert not _DAY_RE.match("../../../")
         assert not _DAY_RE.match("2026-10-3")
+
+    def test_range_bounds(self):
+        """A start past EOF is 416, not a wrong one-byte 206; suffix ranges mean
+        the LAST n bytes; junk is ignored so the client just gets the whole file."""
+        from app.server import _range_bounds
+        self.assertEqual(_range_bounds("bytes=50-", 100), (50, 99))
+        self.assertEqual(_range_bounds("bytes=0-49", 100), (0, 49))
+        self.assertEqual(_range_bounds("bytes=-10", 100), (90, 99))
+        self.assertEqual(_range_bounds("bytes=200-", 100), "unsatisfiable")
+        self.assertIsNone(_range_bounds("garbage", 100))
+        self.assertIsNone(_range_bounds(None, 100))
 
 
 class TestAudioUrls(unittest.TestCase):
