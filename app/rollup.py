@@ -47,9 +47,22 @@ def _transcript(rows) -> list[dict]:
     return out
 
 
-def build(day: str | None = None, *, force: bool = False, speak: bool = True, from_ms: int | None = None, to_ms: int | None = None) -> dict:
-    """One roll-up. Returns a run summary dict."""
+def build(day: str | None = None, *, force: bool = False, speak: bool = True, from_ms: int | None = None, to_ms: int | None = None, progress=None) -> dict:
+    """One roll-up. Returns a run summary dict.
+
+    `progress(done, total, stage)` is called before each chat and at the audio
+    phase, so the web button can show live "reading 2 of 3" instead of a static
+    label. It is optional and every call is guarded — a broken reporter must never
+    fail the roll-up that the button was pressed to run.
+    """
     from .ingest import INGEST  # late import: the ingest thread owns the registries
+
+    def report(done: int, total: int, stage: str) -> None:
+        if progress is not None:
+            try:
+                progress(done, total, stage)
+            except Exception:
+                pass
 
     now_ms = int(time.time() * 1000)
     start, end = (from_ms, to_ms) if (from_ms and to_ms) else store.window_start_ms(now_ms)
@@ -74,7 +87,9 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
             return {"ok": True, "status": "ok", "chats": 0, "day": day, "detail": ["quiet day, nothing in the window"]}
 
         rendered: list[dict] = []
-        for row in rows:
+        total_chats = len(rows)
+        for i, row in enumerate(rows):
+            report(i, total_chats, f"reading {row['chat_id'][:24]}")
             messages += int(row["msg_count"])
             msgs = store.messages_for(row["chat_id"], start, end)
             transcript = _transcript(msgs)
@@ -137,6 +152,7 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
             )
 
             if speak and config.TTS_ENABLED:
+                report(i, total_chats, f"voicing {title[:24]}")
                 try:
                     clip = audio.render_chat(day, record, force=force)
                     for key in ("audio_path", "audio_bytes", "audio_seconds"):
@@ -147,8 +163,10 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
 
             store.save_rollup(day, record)
             rendered.append({"chat_id": row["chat_id"], "title": title, "record": record})
+            report(i + 1, total_chats, f"done {title[:24]}")
 
         if speak and config.TTS_ENABLED and rendered:
+            report(total_chats, total_chats, "voicing the intro")
             try:
                 audio.render_intro(day, [{"title": r["title"], **r["record"]} for r in rendered])
             except Exception as exc:
@@ -156,6 +174,7 @@ def build(day: str | None = None, *, force: bool = False, speak: bool = True, fr
                 store.log_event("audio-failed", f"intro: {exc}")
 
         if config.PURGE_RAW_AFTER_ROLLUP:
+            report(total_chats, total_chats, "wiping the buffer")
             purged = audio_purge(start, end)
 
         ok = True

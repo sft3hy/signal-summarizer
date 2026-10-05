@@ -42,7 +42,8 @@ _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _AUDIO_FILE_RE = re.compile(r"^(?:[a-f0-9]{16}|intro)\.mp3$")
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _BUILD_LOCK = threading.Lock()
-_BUILD = {"running": False, "started": None, "last": None, "result": None}
+_BUILD = {"running": False, "started": None, "last": None, "result": None,
+          "done": 0, "total": 0, "stage": ""}
 _LINK = {"state": "idle", "uri": "", "at": 0, "detail": "", "aci": ""}
 _LINK_LOCK = threading.Lock()
 
@@ -79,15 +80,21 @@ def build_now(*, force: bool = False, speak: bool = True) -> dict:
     """Serialize builds: cron, the button and boot catch-up cannot race."""
     if not _BUILD_LOCK.acquire(blocking=False):
         return {"ok": False, "status": "busy", "error": "a roll-up is already running"}
-    _BUILD.update(running=True, started=time.time(), result=None)
+    _BUILD.update(running=True, started=time.time(), result=None, done=0, total=0, stage="starting")
+
+    def report(done: int, total: int, stage: str) -> None:
+        # Called from the build thread; only ever one build holds the lock, so a
+        # plain dict write is safe and /api/build-status reads it from another thread.
+        _BUILD.update(done=done, total=total, stage=stage)
+
     try:
-        result = rollup.build(force=force, speak=speak)
+        result = rollup.build(force=force, speak=speak, progress=report)
         _BUILD["result"] = result
         return result
     except Exception as exc:  # pragma: no cover
         return {"ok": False, "status": "failed", "error": str(exc)[:300]}
     finally:
-        _BUILD.update(running=False, last=time.time())
+        _BUILD.update(running=False, last=time.time(), stage="done")
         _BUILD_LOCK.release()
 
 
@@ -416,7 +423,8 @@ class Handler(BaseHTTPRequestHandler):
         # the build had finished.
         if path == "/api/build-status":
             return self._json({"running": _BUILD["running"], "started": _BUILD["started"],
-                               "last": _BUILD["last"], "result": _BUILD["result"]})
+                               "last": _BUILD["last"], "result": _BUILD["result"],
+                               "done": _BUILD["done"], "total": _BUILD["total"], "stage": _BUILD["stage"]})
         if path == "/api/events":
             return self._json({"events": store.recent_events(30)})
         if path.startswith("/audio/"):
@@ -442,7 +450,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "status": "started"})
         if path == "/api/build-status":
             return self._json({"running": _BUILD["running"], "started": _BUILD["started"],
-                               "last": _BUILD["last"], "result": _BUILD["result"]})
+                               "last": _BUILD["last"], "result": _BUILD["result"],
+                               "done": _BUILD["done"], "total": _BUILD["total"], "stage": _BUILD["stage"]})
         if path == "/api/link/start":
             return self._json(link_start())
         if path == "/api/link/status":

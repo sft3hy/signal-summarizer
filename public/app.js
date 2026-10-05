@@ -25,7 +25,7 @@
     notice: $('#notice'), blockNeeds: $('#blockNeeds'), blockNoted: $('#blockNoted'),
     needs: $('#needs'), noted: $('#noted'), countNeeds: $('#countNeeds'), countNoted: $('#countNoted'),
     empty: $('#empty'), colophon: $('#colophon'), schedule: $('#scheduleLine'),
-    runBtn: $('#runBtn'), toast: $('#toast'),
+    runBtn: $('#runBtn'), toast: $('#toast'), runStage: $('#runStage'),
   };
 
   let state = null;
@@ -36,6 +36,7 @@
   let peaks = new Map();
   let pollTimer = null;
   let toastTimer = null;
+  let buildStartedAt = 0;
   const blobs = new Map();
 
   const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
@@ -486,18 +487,51 @@
   });
 
   el.runBtn.addEventListener('click', async () => {
-    el.runBtn.disabled = true;
-    el.runBtn.textContent = 'Running';
+    setRunning(true, 'starting');
     try {
       const r = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const j = await r.json();
-      toast(j.status === 'busy' ? 'One is already running.' : 'Reading the last 24 hours.');
+      if (j.status === 'busy') { toast('One is already running.'); poll(); return; }
+      toast('Reading the last 24 hours.');
       poll();
     } catch (err) {
       toast('The summarizer is not answering.');
-      el.runBtn.disabled = false; el.runBtn.textContent = 'Run it now';
+      setRunning(false);
     }
   });
+
+  // Turn the button into a spinner with live stage text for the whole build.
+  // The eight seconds an omlx call plus a serial af_heart render takes looked
+  // like nothing happening; now the button visibly works and says what it's on.
+  function setRunning(on, stage) {
+    if (on) {
+      el.runBtn.disabled = true;
+      el.runBtn.innerHTML = '<span class="spin" aria-hidden="true"></span> Running';
+      el.runBtn.setAttribute('aria-busy', 'true');
+      paintStage(stage, { elapsed: true });
+    } else {
+      el.runBtn.disabled = false;
+      el.runBtn.textContent = 'Run it now';
+      el.runBtn.removeAttribute('aria-busy');
+      if (el.runStage) el.runStage.innerHTML = '';
+    }
+  }
+
+  function paintStage(stage, opts) {
+    if (!el.runStage) return;
+    const parts = [];
+    if (stage) parts.push(esc(stage));
+    if (opts && opts.elapsed) {
+      const secs = buildElapsed();
+      if (secs != null) parts.push(`<b>${secs}s</b>`);
+    }
+    el.runStage.innerHTML = parts.join(' · ');
+  }
+
+  function buildElapsed() {
+    if (!buildStartedAt) return null;
+    return Math.max(0, Math.round((Date.now() - buildStartedAt) / 1000));
+  }
 
   addEventListener('keydown', e => {
     if (e.target.matches('input,select,textarea,button')) return;
@@ -531,7 +565,7 @@
         needs_reply: c.needs_reply, kind: c.kind });
     }
     paintHeader(); paintDays(); paintWave(); paintTransport(); paintThreads(); paintColophon();
-    if (state.building) poll();
+    if (state.building) { buildStartedAt = (state.run && state.run.started_at ? Number(state.run.started_at) : Date.now()); setRunning(true, 'working'); poll(); }
   }
 
   function poll() {
@@ -541,13 +575,24 @@
         const r = await fetch('/api/build-status', { cache: 'no-store' });
         if (!r.ok) throw new Error(`build-status ${r.status}`);
         const j = await r.json();
-        if (j.running || j.status === 'busy') { poll(); return; }
-        el.runBtn.disabled = false; el.runBtn.textContent = 'Run it now';
+        if (j.running || j.status === 'busy') {
+          // Live progress: "reading 2 of 3" when the backend reports counts, else
+          // whatever stage string it has. Polls faster than idle so it feels alive.
+          if (!buildStartedAt && j.started) buildStartedAt = Number(j.started) * 1000;
+          const stage = (j.total ? `reading ${j.done} of ${j.total}` : '') || j.stage || 'working';
+          setRunning(true, stage);
+          poll(); return;
+        }
+        buildStartedAt = 0;
+        setRunning(false);
         if (j.result && j.result.status === 'failed') toast('Roll-up failed. The details are in the panel.');
         else { toast('Roll-up ready.'); load(state && state.day); }
       } catch (err) { poll(); }
-    }, 5000);
+    }, pollDelay());
   }
+
+  // Snappier while a build is visibly running; relaxed otherwise.
+  function pollDelay() { return el.runBtn.disabled ? 1800 : 5000; }
 
   try {
     const saved = parseFloat(localStorage.getItem('ss-rate') || '1');

@@ -194,6 +194,15 @@ button.ghost:hover{color:var(--chalk);border-color:var(--ash)}
 .quiet{background:transparent;border:0;color:var(--signal);font:500 12.5px/1 var(--sans);cursor:pointer;padding:0 0 1px;border-bottom:1px solid rgba(74,134,255,.3)}
 .quiet:disabled{color:#4e5b74;border-color:transparent;cursor:default}
 
+/* "Run it now" while working: a spinner plus live stage text, so the eight
+   seconds an omlx call and a serial af_heart render take never reads as dead. */
+.run-wrap{display:inline-flex;align-items:center;gap:8px}
+.spin{width:13px;height:13px;border-radius:50%;border:2px solid rgba(74,134,255,.28);border-top-color:var(--signal);animation:ssspin .8s linear infinite;flex:none}
+@keyframes ssspin{to{transform:rotate(360deg)}}
+.run-stage{font-size:11.5px;color:#4e5b74;min-width:0}
+.run-stage b{color:var(--ash);font-weight:500}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:1.6s}}
+
 .toast{position:fixed;left:50%;bottom:calc(var(--sab) + 20px);transform:translateX(-50%);background:#1a2436;border:1px solid #2b3a54;color:var(--chalk);font:500 13px/1.4 var(--sans);padding:10px 15px;border-radius:9px;z-index:40;box-shadow:0 10px 28px rgba(0,0,0,.45);max-width:min(86vw,400px)}
 
 @media (max-width:430px){
