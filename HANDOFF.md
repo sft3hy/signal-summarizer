@@ -76,10 +76,31 @@ mis-stated it. This service must use only the personal cell. Never register it.
 
 ---
 
-## The one open item
+## The one open item — CLOSED 2026-10-05
 
-**Send one fresh Signal message, then run the roll-up.**
+**Live ingest is proven.** The 20:00 job ran nightly on 10-03/10-04/10-05 and
+real messages flowed: run 24 (10-04) carried 3 chats / 18 messages, run 25
+(10-05) carried 3 chats / 6 messages, all `ok`, audio rendered for every chat.
+The SSE path has carried real traffic; this is no longer the open item.
 
+**Why the app said "nothing to read" on 10-05 morning, and why "Run it now"
+looked dead.** Not a bug — two ordinary things stacked:
+
+1. The 20:00 roll-up had already run the night before and **purged the buffer**
+   (by design). Overnight only group-`DELIVER` chatter arrived, which the parser
+   correctly drops as non-message noise, so by morning the live buffer legitimately
+   held ~0 summarizable text. `/api/state` returning empty chats was *correct*.
+2. Pressing "Run it now" **does** start a build, but each chat is an omlx call
+   followed by a serial af_heart render — ~8s for 3 chats. The button flips to
+   "Running" and `/api/build-status` polls every 5s, so there is a real window
+   where the UI looks unchanged. It completed fine (`chats: 3`, audio for all).
+
+If it ever looks stuck, check in this order — `/api/build-status` (running?),
+then `runs` table / events (`rollup` vs `stream-error`), then buffer count. A
+genuine wedge shows `running:true` with a stale `started_at`; the build lock
+reclaims after `SS_BUILD_LOCK_STALE` (1800s).
+
+--- original note, kept for history ---
 Earlier notes he sent were delivered, acked and consumed by the daemon while
 `handle()` was crashing — they are gone and cannot be recovered (see "No backfill").
 
